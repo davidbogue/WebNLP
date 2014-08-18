@@ -2,8 +2,12 @@ package com.surmize.webnlp.cluster;
 
 import com.surmize.machinelearning.cluster.lucene.ClusterTerms;
 import com.surmize.machinelearning.cluster.lucene.ClusterTopTermsMapper;
+import com.surmize.webnlp.model.ClusterCreationArtifacts;
+import com.surmize.webnlp.services.MongoService;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -22,7 +26,7 @@ import org.apache.mahout.utils.vectors.lucene.Driver;
 
 public class KMeansClusterBuilder {
     
-    public synchronized void buildClusterFromSolr(String solrIndexDir) throws IOException, InterruptedException, ClassNotFoundException, Exception{
+    public synchronized ClusterCreationArtifacts buildClusterFromSolr(String solrIndexDir) throws IOException, InterruptedException, ClassNotFoundException, Exception{
         Configuration conf = new Configuration();
         FileSystem fs = FileSystem.get(conf);
 
@@ -37,15 +41,17 @@ public class KMeansClusterBuilder {
         Path inputClustersPath = new Path(inputClustersDir);
         Path solrVectorPath = new Path(solrVectorsFile);
         Path clusterOutputPath = new Path(outputClusterDir);
-        Path pointsPath = new Path(outputClusterDir+ "/" + Cluster.CLUSTERED_POINTS_DIR);
 
         inputClustersPath = runKMeansCluster(measureClazz, inputClustersPath,solrVectorPath, clusterOutputPath);
-        generateClusterTopTerms(inputClustersPath, solrDictFile);
-        mapDocumentsToClusters(fs, conf);
+        
+        ClusterCreationArtifacts artifacts = new ClusterCreationArtifacts();
+        artifacts.setClusters(generateClusterTopTerms(inputClustersPath, solrDictFile));        
+        artifacts.setDocumentClusterMap(mapDocumentsToClusters(fs, conf)); 
+        return artifacts;
     }
 
-    private void mapDocumentsToClusters(FileSystem fs, Configuration conf) throws IOException {
-        //Read and print out the cluster points to the console
+    private Map<String, String> mapDocumentsToClusters(FileSystem fs, Configuration conf) throws IOException {
+        Map<String, String> documentClusterMap = new HashMap<>();
         try ( SequenceFile.Reader reader = new SequenceFile.Reader(fs,
                 new Path("clustering/output/" + Cluster.CLUSTERED_POINTS_DIR + "/part-m-0"), conf)) {
             IntWritable key = new IntWritable();
@@ -56,12 +62,13 @@ public class KMeansClusterBuilder {
                 if(v instanceof NamedVector){
                     vectorName = ((NamedVector)v).getName();
                 }
-//                System.out.println(vectorName + " belongs to cluster " + key.toString());
+                documentClusterMap.put(vectorName, key.toString()); // document key and cluster key
             }
         }
+        return documentClusterMap;
     }
 
-    private void generateClusterTopTerms(Path inputClustersPath, String solrDictFile) throws Exception {
+    private List<ClusterTerms> generateClusterTopTerms(Path inputClustersPath, String solrDictFile) throws Exception {
         ClusterTopTermsMapper clusterTopTerms = new ClusterTopTermsMapper(inputClustersPath, solrDictFile);
         List<ClusterTerms> clusterTermsList = clusterTopTerms.getClusterTerms();
         for (ClusterTerms clusterTerms : clusterTermsList) {
@@ -70,6 +77,7 @@ public class KMeansClusterBuilder {
                 System.out.println("\t"+term);
             }
         }
+        return clusterTermsList;
     }
 
     private Path runKMeansCluster(Class measureClazz, Path inputClustersPath, Path solrVectorPath, Path clusterOutputPath) throws IOException, ClassNotFoundException, InterruptedException {
